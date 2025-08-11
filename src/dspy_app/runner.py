@@ -20,6 +20,7 @@ from dspy_base.lm import configure_dspy
 from webui.state import state as ui_state
 
 from .wiring import setup_task
+from .tasks.horror import set_horror_judge_model
 from .gepa.core import GEPA
 
 
@@ -67,6 +68,10 @@ def run(args) -> None:
         use_paper_prompts=args.use_paper_prompts,
         pdf_path=args.pdf,
     )
+
+    # Configure judge model if provided (horror only)
+    if args.task == "horror":
+        set_horror_judge_model(args.judge_model)
 
     # Initialize UI header state
     ui_state.reset(
@@ -121,6 +126,13 @@ def run(args) -> None:
             seed=args.seed,
             merge_prob=args.merge_prob,
         )
+        # Attach reflection/acceptance knobs and feedback extractor for horror
+        if args.task == "horror":
+            from .tasks.horror import horror_feedback_extractor
+            gepa.feedback_extractor = horror_feedback_extractor
+        gepa.k_proposals = int(args.k)
+        gepa.reflect_temp = float(args.reflect_temp)
+        gepa.accept_eps = float(args.accept_eps)
         winner, best_mean = gepa.optimize(seed_prompts=prompts, rollout_budget=args.budget)
         print("\nBest Pareto mean after GEPA:", f"{best_mean:.3f}")
         print("\n--- Improved prompts (diff vs start) ---")

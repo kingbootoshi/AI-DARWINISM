@@ -42,15 +42,38 @@ class HotpotSystem:
 
 
 class HorrorSystem:
-    """Single-module horror microfiction writer. Output is reused as answer."""
+    """Single-module horror microfiction writer. Output is reused as answer.
 
-    def __init__(self, lm: dspy.LM, module_specs: Dict[str, ModuleSpec]):
+    For horror generation, we default the module's LM to temperature=1 for
+    diverse outputs unless the provided `lm` already specifies otherwise.
+    """
+
+    def __init__(self, lm: dspy.LM, module_specs: Dict[str, ModuleSpec], provider_kwargs: Dict[str, Any] | None = None):
         self.lm = lm
         self.specs = module_specs
+        # Always source credentials from central settings to ensure OpenRouter base is used
+        try:
+            from config.settings import get_settings
+            s = get_settings()
+            self.provider_kwargs = {
+                **(provider_kwargs or {}),
+                "api_base": s.api_base,
+                "api_key": s.api_key,
+            }
+        except Exception:
+            self.provider_kwargs = dict(provider_kwargs or {})
+        self.hot_lm = dspy.LM(lm.model, temperature=1.0, **self.provider_kwargs)
+        # Build modules with default LM; we'll temporarily swap settings on run
         self.modules = {k: v.make_module() for k, v in self.specs.items()}
 
     def run(self, item: HorrorItem, capture_traces: bool = True) -> SystemIO:  # noqa: ARG002
-        story = self.modules["horror_writer"](prompt=item.prompt).story
+        prev_lm = dspy.settings.lm
+        try:
+            dspy.settings.configure(lm=self.hot_lm)
+            story = self.modules["horror_writer"](prompt=item.prompt).story
+        finally:
+            # Restore original LM configuration
+            dspy.settings.configure(lm=prev_lm)
         return SystemIO(inter={"story": story}, answer=story)
 
 

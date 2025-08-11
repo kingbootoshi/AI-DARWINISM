@@ -17,6 +17,7 @@ from webui.state import state as ui_state
 
 from .types import Candidate
 from .reflect import update_instruction_via_reflection
+from .types import SystemIO
 
 
 def set_seed(seed: int = 2025) -> None:
@@ -60,7 +61,11 @@ class GEPA:
 
     # --- helpers ---
     def _evaluate_on(self, cand: Candidate, indices: Sequence[int]):
-        """Run system on selected items and compute scores + compact traces."""
+        """Run system on selected items and compute scores + compact traces.
+
+        Optionally attaches judge-derived feedback if the system exposes it via
+        `self.feedback_extractor` (set externally by the runner).
+        """
         sys_inst = self.system_factory(cand.prompts)
         scores: List[float] = []
         traces: List[Dict[str, Any]] = []
@@ -69,6 +74,14 @@ class GEPA:
             io = sys_inst.run(item, capture_traces=True)
             gold = getattr(item, "answer", "")
             scr = self.metric(io.answer, gold)
+            # Optional feedback extractor (duck-typed via attribute)
+            fb: Dict[str, Any] = {}
+            extractor = getattr(self, "feedback_extractor", None)
+            if callable(extractor):
+                try:
+                    fb = extractor(item, io)  # type: ignore[arg-type]
+                except Exception:
+                    fb = {}
             scores.append(scr)
             if dataclasses.is_dataclass(item):
                 try:
@@ -85,7 +98,8 @@ class GEPA:
                 "score": scr,
                 "inputs": inputs_view,
                 "outputs": outs,
-                "issue": issue,
+                "issue": fb.get("issue", issue),
+                **({"judge": fb["judge"]} if "judge" in fb else {}),
             })
         return scores, traces
 
@@ -256,59 +270,66 @@ class GEPA:
 
             cur_instruction = parent.prompts[module_name]
             io_schema = f"Module {module_name}: keep IO schema unchanged and improve instruction."
-            new_instruction = update_instruction_via_reflection(
+            proposals = update_instruction_via_reflection(
                 None,  # lm is taken from dspy.settings
                 module_name,
                 io_schema,
                 cur_instruction,
                 batch_traces_for_module,
+                k=int(getattr(self, "k_proposals", 1)),
+                reflect_temp=float(getattr(self, "reflect_temp", 0.7)),
             )
-            if new_instruction.strip() == cur_instruction.strip():
+            if not proposals:
                 continue
 
-            child_prompts = dict(parent.prompts)
-            child_prompts[module_name] = new_instruction
-            child = Candidate(prompts=child_prompts)
-
-            child_scores, child_traces = self._evaluate_on(child, batch)
-            for j, idx_global in enumerate(batch):
-                ui_state.add_output_stream(
-                    phase="minibatch_child",
-                    cand_id=-1,
-                    item_index=int(idx_global),
-                    inputs=child_traces[j]["inputs"],
-                    outputs=child_traces[j]["outputs"],
-                    score=float(child_scores[j]),
-                    meta={"module": module_name},
-                )
-
+            # Evaluate all proposals and select best on the minibatch
             parent_mean = float(np.mean(parent_scores)) if parent_scores else 0.0
-            child_mean = float(np.mean(child_scores)) if child_scores else 0.0
-            ui_state.set_last_mutation(
-                {
-                    "module": module_name,
-                    "parent_mean": parent_mean,
-                    "child_mean": child_mean,
-                    "accepted": child_mean > parent_mean,
-                    "old_instruction": cur_instruction,
-                    "new_instruction": new_instruction,
-                }
-            )
-            ui_state.log_event(
-                "mutation_attempt", {"module": module_name, "parent_mean": parent_mean, "child_mean": child_mean}
-            )
+            best_child: Optional[Candidate] = None
+            best_mean = -1.0
+            best_traces = None
 
-            if child_mean > parent_mean:
-                self.candidates.append(child)
+            for ni in proposals:
+                child_prompts = dict(parent.prompts)
+                child_prompts[module_name] = ni
+                child = Candidate(prompts=child_prompts)
+                child_scores, child_traces = self._evaluate_on(child, batch)
+                m = float(np.mean(child_scores)) if child_scores else -1.0
+                # Stream child minibatch outputs
+                for j, idx_global in enumerate(batch):
+                    ui_state.add_output_stream(
+                        phase="minibatch_child",
+                        cand_id=-1,
+                        item_index=int(idx_global),
+                        inputs=child_traces[j]["inputs"],
+                        outputs=child_traces[j]["outputs"],
+                        score=float(child_scores[j]),
+                        meta={"module": module_name},
+                    )
+                if m > best_mean:
+                    best_child, best_mean, best_traces = child, m, child_traces
+
+            ui_state.set_last_mutation({
+                "module": module_name,
+                "parent_mean": parent_mean,
+                "child_mean": best_mean,
+                "accepted": best_mean > parent_mean + float(getattr(self, "accept_eps", 0.0)),
+                "old_instruction": cur_instruction,
+                "new_instruction": best_child.prompts[module_name] if best_child else cur_instruction,
+            })
+            ui_state.log_event("mutation_attempt", {"module": module_name, "parent_mean": parent_mean, "child_mean": best_mean})
+
+            # Acceptance with epsilon margin
+            if best_child and (best_mean > parent_mean + float(getattr(self, "accept_eps", 0.0))):
+                self.candidates.append(best_child)
                 self.parents.append(k)
-                S_child, tr_child = self._evaluate_on(child, self.D_pareto_idx)
+                S_child, tr_child = self._evaluate_on(best_child, self.D_pareto_idx)
                 self.S.append(S_child)
                 cand_id = len(self.candidates) - 1
                 mean_child = float(np.mean(S_child)) if S_child else None
                 ui_state.add_candidate(
                     cand_id=cand_id,
                     parent=k,
-                    prompts=child.prompts,
+                    prompts=best_child.prompts,
                     mean_score=mean_child,
                     scores_row=S_child,
                 )

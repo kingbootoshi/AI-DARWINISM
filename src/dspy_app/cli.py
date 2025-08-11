@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=2025)
     parser.add_argument("--task", choices=["hotpot", "horror"], default="hotpot", help="Choose task to run.")
     parser.add_argument("--web", action="store_true", help="Launch a local web UI on http://127.0.0.1:3000")
+    # Reflection/acceptance knobs
+    parser.add_argument("--k", type=int, default=3, help="Num prompt proposals per mutation.")
+    parser.add_argument("--reflect-temp", type=float, default=0.7, help="Temperature for the reflector LLM.")
+    parser.add_argument("--accept-eps", type=float, default=0.02, help="Min improvement needed to accept.")
+    parser.add_argument("--judge-model", type=str, default=None, help="Optional model id for judge to reduce bias.")
     return parser
 
 

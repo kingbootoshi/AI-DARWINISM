@@ -30,6 +30,7 @@
       <div class="card">
         <h2>Last Mutation</h2>
         <div id="last-mutation"></div>
+        <div id="last-mutation-diff"></div>
       </div>
       <div class="card" style="flex:1 1 340px">
         <h2>Selected Candidate Prompts</h2>
@@ -87,7 +88,13 @@
           const preIn = document.createElement('pre');
           preIn.textContent = 'inputs: ' + JSON.stringify(r.inputs, null, 2);
           const preOut = document.createElement('pre');
-          preOut.textContent = 'outputs: ' + JSON.stringify(r.outputs, null, 2);
+          // show judge details inline if present
+          let extra = '';
+          if (r.outputs && r.outputs.judge) {
+            const j = r.outputs.judge;
+            extra = `\njudge: S=${j.scariness} Su=${j.suspense} O=${j.originality} C=${j.clarity} R2=${j.rule_two_sentences} ; note: ${j.explanation||''}`;
+          }
+          preOut.textContent = 'outputs: ' + JSON.stringify(r.outputs, null, 2) + extra;
           d.appendChild(preIn);
           d.appendChild(preOut);
           div.appendChild(d);
@@ -136,17 +143,32 @@
             lm.innerHTML = `<div>Module: <b>${module}</b> — parent: ${(parent_mean||0).toFixed(3)} → child: ${(child_mean||0).toFixed(3)} ${accepted? '✅' : '❌'}</div>
               <div class="mut"><b>Old</b><pre>${old_instruction||''}</pre></div>
               <div class="mut"><b>New</b><pre>${new_instruction||''}</pre></div>`;
+            // naive inline diff highlight (changed spans)
+            try {
+              const a = (old_instruction||'').split(/\s+/);
+              const b = (new_instruction||'').split(/\s+/);
+              const changed = b.filter(w => !a.includes(w));
+              const diffHtml = b.map(w => changed.includes(w) ? `<mark>${w}</mark>` : w).join(' ');
+              document.getElementById('last-mutation-diff').innerHTML = `<div class="mut"><b>Diff</b><pre>${diffHtml}</pre></div>`;
+            } catch {}
           } else {
             lm.textContent = '—';
           }
 
-          // Events
+          // Events with judge deltas if present
           const evDiv = document.getElementById('events');
           evDiv.innerHTML = '';
           for (const ev of (s.events || []).slice(-50).reverse()) {
             const d = document.createElement('div');
             d.className = 'mut';
-            d.textContent = `[${new Date(ev.t*1000).toLocaleTimeString()}] ${ev.type} :: ${JSON.stringify(ev.data)}`;
+            let line = `[${new Date(ev.t*1000).toLocaleTimeString()}] ${ev.type} :: `;
+            if (ev.type === 'mutation_attempt' && ev.data) {
+              const { module, parent_mean, child_mean } = ev.data;
+              line += `module=${module} parent=${(parent_mean||0).toFixed(3)} child=${(child_mean||0).toFixed(3)}`;
+            } else {
+              line += JSON.stringify(ev.data);
+            }
+            d.textContent = line;
             evDiv.appendChild(d);
           }
 

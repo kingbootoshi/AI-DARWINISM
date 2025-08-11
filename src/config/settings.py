@@ -84,6 +84,13 @@ def get_settings() -> Settings:
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
     api_base = os.getenv("OPENROUTER_API_BASE") or os.getenv("OPENAI_API_BASE")
 
+    # Bridge environment for libraries that only check OpenAI variables
+    # When using OpenRouter, mirror values into OPENAI_* vars if unset.
+    if api_key and not os.getenv("OPENAI_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = api_key
+    if api_base and not os.getenv("OPENAI_API_BASE"):
+        os.environ["OPENAI_API_BASE"] = api_base
+
     model = os.getenv("DSPY_MODEL", "openai/gpt-4o-mini")
     cache_lm = _to_bool(os.getenv("DSPY_CACHE"), default=False)
     enable_dspy_logging = _to_bool(os.getenv("DSPY_ENABLE_LOGGING"), default=True)

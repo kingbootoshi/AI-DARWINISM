@@ -25,6 +25,7 @@ def configure_dspy(settings: Settings) -> dspy.LM:
         "model": settings.model,
         "cache": settings.cache_lm,
     }
+    # Always pass provider base/key through to LM so downstream clones inherit them
     if settings.api_base:
         lm_kwargs["api_base"] = settings.api_base
     if settings.api_key:

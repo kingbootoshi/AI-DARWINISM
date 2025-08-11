@@ -29,12 +29,13 @@ class ModuleSpec:
     outputs: Dict[str, str]
     instruction: str
 
-    def make_module(self):  # lazy import to avoid circulars
+    def make_module(self, lm=None):  # lazy import to avoid circulars
         import dspy
         from .signatures import build_signature
 
         Sig = build_signature(self.name + "Sig", self.instruction, self.inputs, self.outputs)
-        return dspy.Predict(Sig)
+        # Allow a custom LM (e.g., to set temperature for generation)
+        return dspy.Predict(Sig, lm=lm) if lm is not None else dspy.Predict(Sig)
 
 
 @dataclass

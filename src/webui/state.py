@@ -160,6 +160,7 @@ class EvolutionState:
                 "candidate": cand_id,
                 "item_index": item_index,
                 "inputs": inputs,
+                # if judge details are present elsewhere, allow passthrough on outputs
                 "outputs": outputs,
                 "score": float(score),
                 "meta": meta or {},
