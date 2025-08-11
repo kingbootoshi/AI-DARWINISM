@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Darwinism – GEPA Dashboard</title>
+    <style>
+      body { font-family: -apple-system, system-ui, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, sans-serif; margin: 20px; color: #111; }
+      .row { display: flex; gap: 16px; flex-wrap: wrap; }
+      .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; flex: 1 1 340px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+      h2 { margin: 6px 0 10px; font-size: 18px; }
+      pre { white-space: pre-wrap; word-break: break-word; background: #fafafa; padding: 8px; border-radius: 6px; border: 1px solid #eee; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #e5e5e5; padding: 6px 8px; font-size: 13px; text-align: left; }
+      tr:nth-child(even) { background: #fafafa; }
+      .badge { font-size: 12px; padding: 2px 6px; border-radius: 999px; background: #111; color: #fff; }
+      .mut { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Darwinism – GEPA Dashboard</h1>
+    <div id="meta" class="row"></div>
+    <div class="row">
+      <div class="card" style="max-width: 740px">
+        <h2>Leaderboard</h2>
+        <table id="leaderboard"><thead><tr>
+          <th>ID</th><th>Parent</th><th>Mean</th><th>Best?</th><th>Modules</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Last Mutation</h2>
+        <div id="last-mutation"></div>
+      </div>
+      <div class="card" style="flex:1 1 340px">
+        <h2>Selected Candidate Prompts</h2>
+        <div id="prompts">Click a leaderboard row to view prompts.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: 16px;">
+      <h2>Events</h2>
+      <div id="events"></div>
+    </div>
+
+    <div class="row" style="margin-top: 16px;">
+      <div class="card">
+        <h2>Baseline Outputs</h2>
+        <div id="baseline"></div>
+      </div>
+      <div class="card">
+        <h2>Live Outputs</h2>
+        <div id="live"></div>
+      </div>
+    </div>
+
+    <script>
+      let _state = null;
+      let selectedId = null;
+
+      function renderPrompts() {
+        const el = document.getElementById('prompts');
+        if (!_state || selectedId === null) {
+          el.textContent = 'Click a leaderboard row to view prompts.';
+          return;
+        }
+        const cand = _state.candidates.find(c => c.id === selectedId);
+        if (!cand) { el.textContent = '—'; return; }
+        const prompts = cand.prompts || {};
+        el.innerHTML = '';
+        for (const [mod, instr] of Object.entries(prompts)) {
+          const header = document.createElement('div');
+          header.innerHTML = `<b>${mod}</b>`;
+          const pre = document.createElement('pre');
+          pre.textContent = instr;
+          el.appendChild(header);
+          el.appendChild(pre);
+        }
+      }
+
+      function renderList(div, rows) {
+        div.innerHTML = '';
+        for (const r of rows) {
+          const d = document.createElement('div');
+          d.className = 'mut';
+          d.style.marginBottom = '8px';
+          d.innerHTML = `<div><span class="badge">${new Date((r.t||Date.now()/1000)*1000).toLocaleTimeString()}</span> <b>${r.phase||'baseline'}</b> #${r.item_index} (cand ${r.candidate ?? '-'}) — score ${(r.score||0).toFixed(3)}</div>`;
+          const preIn = document.createElement('pre');
+          preIn.textContent = 'inputs: ' + JSON.stringify(r.inputs, null, 2);
+          const preOut = document.createElement('pre');
+          preOut.textContent = 'outputs: ' + JSON.stringify(r.outputs, null, 2);
+          d.appendChild(preIn);
+          d.appendChild(preOut);
+          div.appendChild(d);
+        }
+      }
+
+      async function fetchState() {
+        try {
+          const res = await fetch('/state');
+          if (!res.ok) throw new Error('bad response');
+          const s = await res.json();
+          _state = s;
+
+          // Meta
+          const meta = document.getElementById('meta');
+          meta.innerHTML = `
+            <div class="card">
+              <div><span class="badge">Task</span> ${s.task}</div>
+              <div><span class="badge">Model</span> ${s.model}</div>
+              <div><span class="badge">Pareto</span> ${s.pareto_size}</div>
+              <div><span class="badge">Minibatch</span> ${s.minibatch_size}</div>
+              <div><span class="badge">Budget</span> ${s.budget}</div>
+              <div><span class="badge">Merge Prob</span> ${s.merge_prob}</div>
+            </div>`;
+
+          // Leaderboard
+          const tbody = document.querySelector('#leaderboard tbody');
+          tbody.innerHTML = '';
+          const rows = s.candidates
+            .map((c, idx) => ({...c, mean: (s.pareto_scores[idx] || []).reduce((a,b)=>a+b,0) / Math.max(1,(s.pareto_scores[idx]||[]).length)}))
+            .sort((a,b)=> (b.mean||0) - (a.mean||0));
+          for (const c of rows) {
+            const tr = document.createElement('tr');
+            const isBest = c.id === s.best_candidate_id;
+            const modules = Object.keys(c.prompts||{}).join(', ');
+            tr.innerHTML = `<td>${c.id}</td><td>${c.parent ?? ''}</td><td>${(c.mean||0).toFixed(3)}</td><td>${isBest ? '✅' : ''}</td><td>${modules}</td>`;
+            tr.style.cursor = 'pointer';
+            tr.onclick = () => { selectedId = c.id; renderPrompts(); };
+            tbody.appendChild(tr);
+          }
+
+          // Last mutation
+          const lm = document.getElementById('last-mutation');
+          if (s.last_mutation) {
+            const { module, parent_mean, child_mean, accepted, old_instruction, new_instruction } = s.last_mutation;
+            lm.innerHTML = `<div>Module: <b>${module}</b> — parent: ${(parent_mean||0).toFixed(3)} → child: ${(child_mean||0).toFixed(3)} ${accepted? '✅' : '❌'}</div>
+              <div class="mut"><b>Old</b><pre>${old_instruction||''}</pre></div>
+              <div class="mut"><b>New</b><pre>${new_instruction||''}</pre></div>`;
+          } else {
+            lm.textContent = '—';
+          }
+
+          // Events
+          const evDiv = document.getElementById('events');
+          evDiv.innerHTML = '';
+          for (const ev of (s.events || []).slice(-50).reverse()) {
+            const d = document.createElement('div');
+            d.className = 'mut';
+            d.textContent = `[${new Date(ev.t*1000).toLocaleTimeString()}] ${ev.type} :: ${JSON.stringify(ev.data)}`;
+            evDiv.appendChild(d);
+          }
+
+          renderPrompts();
+
+          // Baseline and Live outputs (last N)
+          renderList(document.getElementById('baseline'), (s.baseline||[]).slice(-10).reverse());
+          renderList(document.getElementById('live'), (s.outputs_stream||[]).slice(-10).reverse());
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      setInterval(fetchState, 1000);
+      fetchState();
+    </script>
+  </body>
+</html>
+
+
